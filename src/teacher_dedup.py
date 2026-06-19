@@ -234,11 +234,16 @@ def _extract_institution(msgs: list[dict]) -> str:
 
 def _clean_school_prefixes(name: str) -> str:
     """清理提取出的学校名字中包含的动词/代词前缀"""
-    prefixes = ["我是", "在", "就读于", "毕业于", "近期", "了解", "报考", "联系", "想申请", "向", "给", "我", "是", "在读"]
-    for p in prefixes:
-        if name.startswith(p):
-            name = name[len(p):]
-    return name.strip()
+    prefixes = ["我是", "就读于", "毕业于", "想申请", "在读", "在", "近期", "了解", "报考", "联系", "向", "给", "我", "是", "的", "去"]
+    changed = True
+    while changed:
+        changed = False
+        for p in prefixes:
+            if name.startswith(p):
+                name = name[len(p):].strip()
+                changed = True
+                break
+    return name
 
 
 _DOMAIN_TO_SCHOOL = {

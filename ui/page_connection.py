@@ -74,7 +74,7 @@ def render() -> None:
 
         col_start, col_end = st.columns(2)
         with col_start:
-            default_start = date.today() - timedelta(days=180)
+            default_start = date.today() - timedelta(days=365)
             scan_start = st.date_input("开始日期", value=default_start)
         with col_end:
             default_end = date.today()

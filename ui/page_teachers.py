@@ -10,9 +10,11 @@ from src import database as db
 from src.contact_filter import batch_identify
 from src.thread_builder import build_threads
 from src.teacher_dedup import identify_teachers, check_duplicate_teachers
+import os
 from src.reply_detector import detect_all_replies
 from src.merge_table import build_merged_table, build_stats
 from src.models import ReplyStatus, MergedTeacherRow
+from src.ai_analyzer import analyze_reply_with_ai
 
 
 def render() -> None:
@@ -27,8 +29,20 @@ def render() -> None:
         return
 
     # ── 运行分析 ──
-    if st.button("🔬 运行分析", type="primary", use_container_width=True):
-        _run_analysis(account_id)
+    col_btn, col_toggle = st.columns([3, 1])
+    with col_toggle:
+        use_ai = st.toggle(
+            "结合 AI 语义分析",
+            value=st.session_state.get("use_ai_in_batch", False),
+            help="开启后在运行分析时自动调用 API 深度提取导师的回复意向（需在「AI 分析设置」配置好 API）",
+        )
+        st.session_state["use_ai_in_batch"] = use_ai
+        
+    with col_btn:
+        run_clicked = st.button("🔬 运行分析", type="primary", use_container_width=True)
+
+    if run_clicked:
+        _run_analysis(account_id, use_ai=use_ai)
 
     # ── 显示结果 ──
     rows: list[MergedTeacherRow] = st.session_state.get("merged_rows", [])
@@ -163,7 +177,7 @@ def render() -> None:
                 st.markdown(f"**建议:** {row.recommended_next_step}")
 
 
-def _run_analysis(account_id: int) -> None:
+def _run_analysis(account_id: int, use_ai: bool = False) -> None:
     """执行完整分析流程"""
     progress = st.progress(0, text="正在分析……")
 
@@ -187,6 +201,67 @@ def _run_analysis(account_id: int) -> None:
         progress.progress(0.7, text="步骤 4/5: 检测回复……")
         detect_all_replies(account_id)
 
+        # 如果开启了 AI 分析，自动为所有新识别的、已收到回复的导师运行 AI 语义深度分析
+        ai_success_count = 0
+        if use_ai:
+            api_key = st.session_state.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
+            base_url = st.session_state.get("openai_base_url") or os.environ.get("OPENAI_BASE_URL")
+            model = st.session_state.get("openai_model") or os.environ.get("OPENAI_MODEL")
+            
+            if not api_key:
+                st.warning("⚠️ 未检测到已配置的 AI API Key，已跳过 AI 步骤。请先在「AI 分析设置」中配置。")
+            else:
+                progress.progress(0.8, text="步骤 4.5/5: 正在进行 AI 深度语义分析……")
+                teachers = db.get_all_teachers(account_id)
+                user_email = st.session_state.get("email_addr", "")
+                
+                for t in teachers:
+                    tid = t["id"]
+                    # 避免重复对已分析过的导师重复调用 API
+                    if db.get_latest_analysis(tid, "ai"):
+                        continue
+                    
+                    teacher_msgs = db.get_teacher_messages(tid)
+                    reply_bodies = []
+                    for msg in teacher_msgs:
+                        if not msg.get("is_sent_by_me") and not msg.get("is_auto_reply"):
+                            body = msg.get("body_text", "") or msg.get("body_html_text", "")
+                            if body.strip():
+                                reply_bodies.append(body)
+                    
+                    if reply_bodies:
+                        full_body = "\n---\n".join(reply_bodies)
+                        try:
+                            result = analyze_reply_with_ai(
+                                full_body,
+                                teacher_name=t["name"],
+                                user_email=user_email,
+                                api_key=api_key,
+                                base_url=base_url,
+                                model=model,
+                            )
+                            if result:
+                                db.insert_analysis({
+                                    "teacher_id": tid,
+                                    "analysis_type": "ai",
+                                    "reply_status": "",
+                                    "reply_summary": result.reply_summary,
+                                    "evidence_sentences": "|".join(result.evidence_sentences),
+                                    "admission_intent": result.admission_intent.value,
+                                    "action_required": result.action_required.value,
+                                    "recommended_next_step": result.recommended_next_step,
+                                    "actual_responder_role": result.actual_responder_role,
+                                    "confidence": result.confidence,
+                                    "ambiguity_reason": result.ambiguity_reason,
+                                    "my_reply_status": "",
+                                    "model_name": model or "gpt-4o-mini",
+                                    "analysis_time": "",
+                                    "input_hash": "",
+                                })
+                                ai_success_count += 1
+                        except Exception:
+                            pass
+
         # Step 5: 生成合并表
         progress.progress(0.9, text="步骤 5/5: 生成导师总表……")
         rows = build_merged_table(account_id)
@@ -197,9 +272,11 @@ def _run_analysis(account_id: int) -> None:
         st.session_state["stats_overview"] = stats
 
         progress.progress(1.0, text="分析完成！")
+        msg_suffix = f" 并自动完成了 {ai_success_count} 位导师的 AI 语义深度解析。" if ai_success_count > 0 else "。"
         st.success(
             f"✅ 分析完成！识别 {len(contact_ids)} 封套磁邮件，"
-            f"{thread_count} 个会话线程，{teacher_count} 位导师。"
+            f"{thread_count} 个会话线程，{teacher_count} 位导师"
+            f"{msg_suffix}"
         )
 
     except Exception as e:
