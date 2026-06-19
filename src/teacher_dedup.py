@@ -275,10 +275,16 @@ def _extract_recipient_emails(msg: dict) -> list[str]:
     to_addrs = msg.get("to_addrs", "")
     if not to_addrs:
         return []
-    from email.utils import getaddresses
-    addrs = getaddresses([to_addrs])
-    emails = []
-    for name, addr in addrs:
-        if addr:
-            emails.append(addr.lower().strip())
+    # 使用正则表达式提取所有括号内的邮箱，或者作为回退提取所有邮箱匹配项
+    emails = re.findall(r'<([^>]+)>', to_addrs)
+    if not emails:
+        parts = re.split(r'[;,]', to_addrs)
+        for p in parts:
+            p = p.strip()
+            if "@" in p:
+                m = re.search(r'[\w.+-]+@[\w.+-]+', p)
+                if m:
+                    emails.append(m.group(0).lower())
+    else:
+        emails = [e.strip().lower() for e in emails if e.strip()]
     return emails

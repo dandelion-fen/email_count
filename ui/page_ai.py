@@ -62,15 +62,29 @@ def render() -> None:
 
     st.markdown("---")
 
-    # ── API Key ──
-    st.subheader("🔑 API Key 配置")
+    # ── API Key & URL 配置 ──
+    st.subheader("🔑 API 配置")
 
+    # API Base URL
+    env_url = os.environ.get("OPENAI_BASE_URL", "")
+    default_url = env_url or st.session_state.get("openai_base_url", "https://api.openai.com/v1")
+    
+    api_base_url = st.text_input(
+        "API 基础 URL (Base URL)",
+        value=default_url,
+        placeholder="https://api.openai.com/v1",
+        help="OpenAI: https://api.openai.com/v1 \n\n"
+             "DeepSeek: https://api.deepseek.com \n\n"
+             "智谱 GLM: https://open.bigmodel.cn/api/paas/v4 \n\n"
+             "使用其他兼容大模型或代理时，在此处修改为相应的 Base URL",
+    )
+    os.environ["OPENAI_BASE_URL"] = api_base_url
+    st.session_state["openai_base_url"] = api_base_url
+
+    # API Key
     env_key = os.environ.get("OPENAI_API_KEY", "")
-    key_source = ""
-
     if env_key:
         st.success("✅ 已从环境变量 `OPENAI_API_KEY` 读取到 API Key")
-        key_source = "env"
         api_key = env_key
     else:
         st.info("💡 未检测到环境变量中的 API Key，请手动输入。")
@@ -79,8 +93,8 @@ def render() -> None:
         "API Key",
         type="password",
         value="" if env_key else st.session_state.get("openai_api_key", ""),
-        placeholder="sk-...",
-        help="从 OpenAI 控制台获取，格式为 sk- 开头",
+        placeholder="请输入 API Key",
+        help="支持 OpenAI (sk-...)、DeepSeek、智谱、Claude、Gemini 等各大兼容平台的 API Key",
         disabled=bool(env_key),
     )
 
@@ -88,23 +102,43 @@ def render() -> None:
         os.environ["OPENAI_API_KEY"] = manual_key
         st.session_state["openai_api_key"] = manual_key
         api_key = manual_key
-        key_source = "manual"
-    elif not env_key:
+    elif env_key:
+        api_key = env_key
+    else:
         api_key = ""
 
     # ── 模型选择 ──
     st.subheader("🧠 模型选择")
 
-    models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
-    current_model = os.environ.get("OPENAI_MODEL", "gpt-4o")
+    models = ["gpt-4o-mini", "gpt-4o", "deepseek-chat", "glm-4", "claude-3-5-sonnet", "gemini-1.5-flash", "自定义模型"]
+    current_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
-    selected_model = st.selectbox(
-        "选择模型",
+    selected_model_idx = 0
+    if current_model in models:
+        selected_model_idx = models.index(current_model)
+    elif current_model:
+        selected_model_idx = models.index("自定义模型")
+
+    selected_model_choice = st.selectbox(
+        "选择预设模型",
         options=models,
-        index=models.index(current_model) if current_model in models else 0,
-        help="gpt-4o 效果最好但费用较高，gpt-4o-mini 性价比高",
+        index=selected_model_idx,
+        help="如果是自定义供应商，请选择「自定义模型」并手动输入模型名称",
     )
+
+    if selected_model_choice == "自定义模型":
+        custom_model = st.text_input(
+            "自定义模型名称",
+            value=current_model if current_model not in models else "deepseek-chat",
+            placeholder="例如: deepseek-chat, qwen-max 等",
+            help="请输入服务商提供的准确模型 ID",
+        )
+        selected_model = custom_model
+    else:
+        selected_model = selected_model_choice
+
     os.environ["OPENAI_MODEL"] = selected_model
+    st.session_state["openai_model"] = selected_model
 
     st.markdown("---")
 
@@ -214,6 +248,9 @@ def render() -> None:
                         full_body,
                         teacher_name=label.split(" — ")[0],
                         user_email=user_email,
+                        api_key=api_key,
+                        base_url=api_base_url,
+                        model=selected_model,
                     )
 
                     if result:

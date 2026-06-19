@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import email.utils
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -121,8 +122,8 @@ def sync_folder(client: IMAPReadOnlyClient,
                 "subject_normalized": parsed.subject_normalized,
                 "from_email": parsed.from_addr.email,
                 "from_name": parsed.from_addr.name,
-                "to_addrs": "; ".join(f"{a.name} <{a.email}>" for a in parsed.to_addrs),
-                "cc_addrs": "; ".join(f"{a.name} <{a.email}>" for a in parsed.cc_addrs),
+                "to_addrs": "; ".join(email.utils.formataddr((a.name, a.email)) for a in parsed.to_addrs),
+                "cc_addrs": "; ".join(email.utils.formataddr((a.name, a.email)) for a in parsed.cc_addrs),
                 "reply_to": parsed.reply_to_addr.email if parsed.reply_to_addr else "",
                 "body_text": parsed.body_text,
                 "body_html_text": parsed.body_html_text,

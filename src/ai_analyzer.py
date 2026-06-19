@@ -46,54 +46,57 @@ ADMISSION_INTENT_VALUES = [e.value for e in AdmissionIntent]
 ACTION_REQUIRED_VALUES = [e.value for e in ActionRequired]
 
 
-def is_ai_available() -> bool:
+def is_ai_available(api_key: str | None = None) -> bool:
     """检查 AI 分析是否可用"""
-    key = os.environ.get("OPENAI_API_KEY", "")
-    return bool(key and key.startswith("sk-"))
+    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    return bool(key and key.strip())
 
 
 def get_model_name() -> str:
     """获取配置的模型名称"""
-    return os.environ.get("OPENAI_MODEL", "gpt-4o")
+    return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 
 def analyze_reply_with_ai(reply_body: str, teacher_name: str = "",
                           user_email: str = "",
-                          db_path: str | None = None) -> Optional[AIAnalysisResult]:
-    """使用 OpenAI API 分析导师回复"""
-    if not is_ai_available():
-        logger.warning("OpenAI API Key 未配置")
+                          db_path: str | None = None,
+                          api_key: str | None = None,
+                          base_url: str | None = None,
+                          model: str | None = None) -> Optional[AIAnalysisResult]:
+    """使用 OpenAI 兼容 API 分析导师回复"""
+    active_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    if not is_ai_available(active_key):
+        logger.warning("API Key 未配置，无法进行 AI 分析")
         return None
+
+    active_url = base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    active_model = model or get_model_name()
 
     # 准备文本（隐私保护）
     safe_text = prepare_text_for_ai(reply_body, user_email)
 
-    # 检查是否已有相同分析
-    text_hash = hashlib.sha256(safe_text.encode()).hexdigest()[:16]
-    model = get_model_name()
-
     try:
         from openai import OpenAI
-        client = OpenAI()  # 自动使用环境变量中的 API Key
+        client = OpenAI(api_key=active_key, base_url=active_url)
 
         user_msg = f"请分析以下导师回复邮件的内容：\n\n{safe_text}"
 
-        response = client.responses.create(
-            model=model,
-            instructions=SYSTEM_PROMPT,
-            input=user_msg,
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "email_analysis",
-                    "schema": _get_json_schema(),
-                    "strict": True,
-                }
-            },
+        # 将 schema 注入到 prompt 中以供非严格 schema 的兼容平台解析
+        full_system_prompt = f"{SYSTEM_PROMPT}\n\n请严格返回 JSON 对象，结构要求如下：\n{json.dumps(_get_json_schema(), ensure_ascii=False, indent=2)}"
+
+        response = client.chat.completions.create(
+            model=active_model,
+            messages=[
+                {"role": "system", "content": full_system_prompt},
+                {"role": "user", "content": user_msg}
+            ],
+            response_format={"type": "json_object"}
         )
 
         # 解析响应
-        result_text = response.output_text
+        result_text = response.choices[0].message.content
+        if not result_text:
+            return None
         result_data = json.loads(result_text)
 
         # Pydantic 校验
