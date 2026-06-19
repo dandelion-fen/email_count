@@ -74,11 +74,10 @@ def render() -> None:
 
         col_start, col_end = st.columns(2)
         with col_start:
-            default_start = st.session_state.get(
-                "scan_start", date.today() - timedelta(days=180))
+            default_start = date.today() - timedelta(days=180)
             scan_start = st.date_input("开始日期", value=default_start)
         with col_end:
-            default_end = st.session_state.get("scan_end", date.today())
+            default_end = date.today()
             scan_end = st.date_input("结束日期", value=default_end)
 
         if scan_start > scan_end:

@@ -15,6 +15,31 @@ st.set_page_config(
 # 初始化数据库
 init_db()
 
+# 自动加载最近一次使用的邮箱账号配置
+if "connected" not in st.session_state:
+    try:
+        from src.database import get_connection
+        conn = get_connection()
+        last_account = conn.execute("SELECT * FROM accounts ORDER BY id DESC LIMIT 1").fetchone()
+        if last_account:
+            st.session_state["email_addr"] = last_account["email"]
+            st.session_state["imap_server"] = last_account["imap_server"]
+            st.session_state["imap_port"] = last_account["imap_port"]
+            st.session_state["use_ssl"] = bool(last_account["use_ssl"])
+            st.session_state["account_id"] = last_account["id"]
+            
+            # 同时尝试从 keyring 载入授权码并自动建立连接状态
+            try:
+                import keyring
+                saved_code = keyring.get_password("mail_tracker", last_account["email"])
+                if saved_code:
+                    st.session_state["auth_code"] = saved_code
+                    st.session_state["connected"] = True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 # 自定义 CSS
 st.markdown("""
 <style>

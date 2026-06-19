@@ -49,7 +49,11 @@ def identify_teachers(account_id: int, contact_msg_ids: list[int],
 
         # 从邮件中提取导师信息
         name = _extract_teacher_name(msgs, email_addr)
-        institution = _extract_institution(msgs)
+        
+        # 优先从邮箱域名获取单位，保证 100% 准确性，其次从正文中提取并清洗
+        institution = _guess_institution_from_email(email_addr)
+        if not institution:
+            institution = _extract_institution(msgs)
 
         needs_review = False
         review_reasons = []
@@ -60,10 +64,8 @@ def identify_teachers(account_id: int, contact_msg_ids: list[int],
             review_reasons.append("无法确认导师姓名")
 
         if not institution:
-            institution = _guess_institution_from_email(email_addr)
-            if not institution:
-                needs_review = True
-                review_reasons.append("无法确认所属单位")
+            needs_review = True
+            review_reasons.append("无法确认所属单位")
 
         # 计算发送信息
         dates = [m.get("date", "") for m in msgs if m.get("date")]
@@ -201,6 +203,13 @@ def _extract_institution(msgs: list[dict]) -> str:
         body = (msg.get("body_text", "") or "")[:800]
         text = subject + " " + body
 
+        # 清理常见的关于学生自己学校的描述，防止干扰
+        clean_text = text
+        clean_text = re.sub(r'我是[\u4e00-\u9fa5]{2,10}(大学|学院)', '', clean_text)
+        clean_text = re.sub(r'就读于[\u4e00-\u9fa5]{2,10}(大学|学院)', '', clean_text)
+        clean_text = re.sub(r'毕业于[\u4e00-\u9fa5]{2,10}(大学|学院)', '', clean_text)
+        clean_text = re.sub(r'在[\u4e00-\u9fa5]{2,10}(大学|学院)学习', '', clean_text)
+
         patterns = [
             r'([\u4e00-\u9fa5]{2,10}大学)',
             r'([\u4e00-\u9fa5]{2,10}研究所)',
@@ -208,27 +217,138 @@ def _extract_institution(msgs: list[dict]) -> str:
             r'([\u4e00-\u9fa5]{2,15}学院)',
         ]
         for pat in patterns:
-            matches = re.findall(pat, text)
+            matches = re.findall(pat, clean_text)
             if matches:
-                # 排除我自己的学校
                 for m in matches:
-                    if "湖北工业" not in m:
+                    m = m.strip()
+                    # 清理前缀词汇以防匹配结果里包含 “我是”、“在读于” 等
+                    m = _clean_school_prefixes(m)
+                    # 排除带有动作词或属于学生自述的词
+                    if any(w in m for w in ["湖北工业", "我是", "就读", "毕业", "在读", "近期", "了解"]):
+                        continue
+                    if len(m) >= 4 and ("大学" in m or "学院" in m or "研究所" in m or "研究院" in m):
                         return m
-                # 如果只有自己学校，可能是主题中的
-                if matches:
-                    return matches[0]
 
     return ""
 
 
+def _clean_school_prefixes(name: str) -> str:
+    """清理提取出的学校名字中包含的动词/代词前缀"""
+    prefixes = ["我是", "在", "就读于", "毕业于", "近期", "了解", "报考", "联系", "想申请", "向", "给", "我", "是", "在读"]
+    for p in prefixes:
+        if name.startswith(p):
+            name = name[len(p):]
+    return name.strip()
+
+
+_DOMAIN_TO_SCHOOL = {
+    "pku.edu.cn": "北京大学",
+    "tsinghua.edu.cn": "清华大学",
+    "zju.edu.cn": "浙江大学",
+    "sjtu.edu.cn": "上海交通大学",
+    "fudan.edu.cn": "复旦大学",
+    "ustc.edu.cn": "中国科学技术大学",
+    "nju.edu.cn": "南京大学",
+    "whu.edu.cn": "武汉大学",
+    "hust.edu.cn": "华中科技大学",
+    "sysu.edu.cn": "中山大学",
+    "hit.edu.cn": "哈尔滨工业大学",
+    "xidian.edu.cn": "西安电子科技大学",
+    "seu.edu.cn": "东南大学",
+    "scut.edu.cn": "华南理工大学",
+    "xmu.edu.cn": "厦门大学",
+    "uestc.edu.cn": "电子科技大学",
+    "bupt.edu.cn": "北京邮电大学",
+    "hnu.edu.cn": "湖南大学",
+    "ecnu.edu.cn": "华东师范大学",
+    "neu.edu.cn": "东北大学",
+    "tongji.edu.cn": "同济大学",
+    "nankai.edu.cn": "南开大学",
+    "tju.edu.cn": "天津大学",
+    "sdu.edu.cn": "山东大学",
+    "cqu.edu.cn": "重庆大学",
+    "scu.edu.cn": "四川大学",
+    "xjtu.edu.cn": "西安交通大学",
+    "nwpu.edu.cn": "西北工业大学",
+    "dlut.edu.cn": "大连理工大学",
+    "jlu.edu.cn": "吉林大学",
+    "lzu.edu.cn": "兰州大学",
+    "buaa.edu.cn": "北京航空航天大学",
+    "bit.edu.cn": "北京理工大学",
+    "ustb.edu.cn": "北京科技大学",
+    "bjtu.edu.cn": "北京交通大学",
+    "ncepu.edu.cn": "华北电力大学",
+    "cumt.edu.cn": "中国矿业大学",
+    "upc.edu.cn": "中国石油大学（华东）",
+    "upb.edu.cn": "中国石油大学（北京）",
+    "ugb.edu.cn": "中国地质大学（北京）",
+    "cug.edu.cn": "中国地质大学（武汉）",
+    "swjtu.edu.cn": "西南交通大学",
+    "nuaa.edu.cn": "南京航空航天大学",
+    "njust.edu.cn": "南京理工大学",
+    "hhu.edu.cn": "河海大学",
+    "jiangnan.edu.cn": "江南大学",
+    "hebut.edu.cn": "河北工业大学",
+    "taur.edu.cn": "太原理工大学",
+    "imu.edu.cn": "内蒙古大学",
+    "dhu.edu.cn": "东华大学",
+    "shmtu.edu.cn": "上海海事大学",
+    "shutcm.edu.cn": "上海中医药大学",
+    "yzu.edu.cn": "扬州大学",
+    "ujs.edu.cn": "江苏大学",
+    "njtech.edu.cn": "南京工业大学",
+    "huel.edu.cn": "湖北工业大学",
+    "hbut.edu.cn": "湖北工业大学",
+    "wust.edu.cn": "武汉科技大学",
+    "whut.edu.cn": "武汉理工大学",
+    "ccnu.edu.cn": "华中师范大学",
+    "hzau.edu.cn": "华中农业大学",
+    "zuel.edu.cn": "中南财经政法大学",
+    "csu.edu.cn": "中南大学",
+    "hunnu.edu.cn": "湖南师范大学",
+    "szu.edu.cn": "深圳大学",
+    "jnu.edu.cn": "暨南大学",
+    "scau.edu.cn": "华南农业大学",
+    "gxu.edu.cn": "广西大学",
+    "hnu.edu.cn": "海南大学",
+    "swufe.edu.cn": "西南财经大学",
+    "sicau.edu.cn": "四川农业大学",
+    "cdut.edu.cn": "成都理工大学",
+    "yuntc.edu.cn": "云南大学",
+    "ynu.edu.cn": "云南大学",
+    "guet.edu.cn": "桂林电子科技大学",
+    "gzu.edu.cn": "贵州大学",
+    "xju.edu.cn": "新疆大学",
+    "shzu.edu.cn": "石河子大学",
+    "ime.ac.cn": "中国科学院微电子研究所",
+    "ucas.ac.cn": "中国科学院大学",
+    "ucas.edu.cn": "中国科学院大学",
+}
+
+
 def _guess_institution_from_email(email: str) -> str:
     """从邮箱域名猜测单位"""
-    domain = email.split("@")[-1].lower()
-    # 常见教育域名
+    email = email.lower().strip()
+    domain = email.split("@")[-1]
+    
+    # 1. 尝试完全匹配
+    if domain in _DOMAIN_TO_SCHOOL:
+        return _DOMAIN_TO_SCHOOL[domain]
+        
+    # 2. 尝试子域名匹配（如 xxx.zju.edu.cn）
+    for d, school in _DOMAIN_TO_SCHOOL.items():
+        if domain.endswith("." + d) or domain == d:
+            return school
+            
+    # 3. 常见教育域名回退
     if ".edu.cn" in domain:
         parts = domain.replace(".edu.cn", "").split(".")
-        return parts[-1] if parts else ""
-    if ".ac.cn" in domain:
+        prefix = parts[-1] if parts else ""
+        for d, school in _DOMAIN_TO_SCHOOL.items():
+            if d.startswith(prefix + "."):
+                return school
+        return prefix.upper()
+    if ".ac.cn" in domain or ".cas.cn" in domain:
         return "中国科学院"
     return ""
 
