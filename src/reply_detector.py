@@ -50,11 +50,39 @@ def detect_replies_for_teacher(teacher_id: int, account_id: int,
 
     teacher_email_set = {normalize_email(e) for e in teacher_emails}
 
+    # 找到这些发送邮件对应的会话线程 ID
+    conn = db.get_connection(db_path)
+    sent_db_ids = [m["id"] for m in sent_msgs]
+    thread_received_msg_ids = set()
+    
+    if sent_db_ids:
+        placeholders = ",".join(["?"] * len(sent_db_ids))
+        try:
+            # 找到发送邮件对应的所有 thread_id
+            t_rows = conn.execute(f"SELECT DISTINCT thread_id FROM thread_messages WHERE message_id IN ({placeholders})", sent_db_ids).fetchall()
+            thread_ids = [r["thread_id"] for r in t_rows]
+            if thread_ids:
+                # 找到这些 thread 中的所有收到邮件的 id
+                th_placeholders = ",".join(["?"] * len(thread_ids))
+                r_rows = conn.execute(f"""
+                    SELECT tm.message_id FROM thread_messages tm
+                    JOIN messages m ON tm.message_id = m.id
+                    WHERE tm.thread_id IN ({th_placeholders}) AND m.is_sent_by_me = 0
+                """, thread_ids).fetchall()
+                thread_received_msg_ids = {r["message_id"] for r in r_rows}
+        except Exception as e:
+            logger.warning(f"Error querying thread messages: {e}")
+
     # 在收件邮件中搜索导师的真实回复
     real_replies = []
     for msg in all_received:
         from_email = normalize_email(msg.get("from_email", ""))
-        if from_email not in teacher_email_set:
+        
+        # 匹配方式：或者是发件人邮箱匹配，或者是该收件在会话线程中
+        is_email_match = from_email in teacher_email_set
+        is_thread_match = msg["id"] in thread_received_msg_ids
+        
+        if not is_email_match and not is_thread_match:
             continue
 
         # 排除退信
@@ -68,31 +96,35 @@ def detect_replies_for_teacher(teacher_id: int, account_id: int,
                                     MessageRole.RECEIVED_AUTO.value, db_path)
             continue
 
-        # 检查是否与套磁相关（通过 Message-ID 引用或主题）
+        # 检查是否与套磁相关（在同一线程，或 In-Reply-To 引用，或主题匹配）
         is_related = False
         match_reason = ""
 
-        # 方法1: In-Reply-To 或 References 引用了我发送的邮件
-        irt = msg.get("in_reply_to", "")
-        refs = msg.get("references_str", "")
-        if irt and irt in sent_message_ids:
+        if is_thread_match:
             is_related = True
-            match_reason = "In-Reply-To 匹配"
-        elif refs:
-            for ref in refs.split():
-                if ref.strip() in sent_message_ids:
-                    is_related = True
-                    match_reason = "References 匹配"
-                    break
-
-        # 方法2: 规范化主题匹配
-        if not is_related:
-            msg_subj = msg.get("subject_normalized", "") or normalize_subject(msg.get("subject", ""))
-            for sent_subj in sent_subjects:
-                if subjects_similar(msg_subj, sent_subj, threshold=0.6):
-                    is_related = True
-                    match_reason = "主题匹配"
-                    break
+            match_reason = "会话线程关联匹配"
+        else:
+            # 方法1: In-Reply-To 或 References 引用了我发送的邮件
+            irt = msg.get("in_reply_to", "")
+            refs = msg.get("references_str", "")
+            if irt and irt in sent_message_ids:
+                is_related = True
+                match_reason = "In-Reply-To 匹配"
+            elif refs:
+                for ref in refs.split():
+                    if ref.strip() in sent_message_ids:
+                        is_related = True
+                        match_reason = "References 匹配"
+                        break
+            
+            # 方法2: 规范化主题匹配
+            if not is_related:
+                msg_subj = msg.get("subject_normalized", "") or normalize_subject(msg.get("subject", ""))
+                for sent_subj in sent_subjects:
+                    if subjects_similar(msg_subj, sent_subj, threshold=0.6):
+                        is_related = True
+                        match_reason = "主题相似匹配"
+                        break
 
         if is_related:
             real_replies.append({
@@ -101,6 +133,12 @@ def detect_replies_for_teacher(teacher_id: int, account_id: int,
             })
             db.link_teacher_message(teacher_id, msg["id"],
                                     MessageRole.RECEIVED_REPLY.value, db_path)
+            
+            # 自动把新发现的回复邮箱关联至导师的邮箱库中，便于后续去重和展示
+            if from_email and from_email not in teacher_email_set:
+                db.add_teacher_email(teacher_id, from_email, is_primary=False,
+                                     source="auto_discovered_reply", db_path=db_path)
+                teacher_email_set.add(from_email)
 
     if real_replies:
         # 读取回复正文确认是真实回复
