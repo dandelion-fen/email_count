@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment & secrets
+.env
+*.env.local
+
+# Database & cache
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+
+# Logs
+logs/
+*.log
+
+# Exports
+exports/
+output/
+*.xlsx
+*.csv
+!teacher_aliases.csv.example
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Keyring
+keyring/
